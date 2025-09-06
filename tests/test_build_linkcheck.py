@@ -237,6 +237,28 @@ def make_redirect_handler(*, support_head):
     return RedirectOnceHandler
 
 
+def make_infinite_redirect_handler():
+    """Creates a handler that always redirects, causing TooManyRedirects on HEAD."""
+    class InfiniteRedirectHandler(http.server.BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            # Always redirect to cause TooManyRedirects
+            self.send_response(302, "Found")
+            self.send_header("Location", "http://localhost:7777/")
+            self.end_headers()
+
+        def do_GET(self):
+            # GET request succeeds to test fallback
+            self.send_response(200, "OK")
+            self.end_headers()
+            self.wfile.write(b"ok\n")
+
+        def log_date_time_string(self):
+            """Strip date and time from logged messages for assertions."""
+            return ""
+
+    return InfiniteRedirectHandler
+
+
 @pytest.mark.sphinx('linkcheck', testroot='linkcheck-localserver', freshenv=True)
 def test_follows_redirects_on_HEAD(app, capsys):
     with http_server(make_redirect_handler(support_head=True)):
@@ -272,6 +294,20 @@ def test_follows_redirects_on_GET(app, capsys):
         127.0.0.1 - - [] "GET /?redirected=1 HTTP/1.1" 204 -
         """
     )
+
+
+@pytest.mark.sphinx('linkcheck', testroot='linkcheck-localserver', freshenv=True)
+def test_too_many_redirects_fallback_to_get(app, capsys):
+    with http_server(make_infinite_redirect_handler()):
+        app.builder.build_all()
+    stdout, stderr = capsys.readouterr()
+    content = (app.outdir / 'output.txt').read_text()
+    # Should succeed with GET request fallback despite HEAD request causing TooManyRedirects
+    assert content == ""  # No errors should be reported
+    # Check that the link was reported as working
+    with open(app.outdir / 'output.json') as fp:
+        json_content = fp.read()
+    assert '"status": "working"' in json_content
 
 
 class OKHandler(http.server.BaseHTTPRequestHandler):
